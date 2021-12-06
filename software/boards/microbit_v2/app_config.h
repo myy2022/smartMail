@@ -3,6 +3,8 @@
 
 #pragma once
 
+#define UART1_ENABLED 1
+
 #define BLE_ADVERTISING_ENABLED 0
 #define NRF_BLE_CONN_PARAMS_ENABLED 1
 #define NRF_BLE_GATT_ENABLED 1

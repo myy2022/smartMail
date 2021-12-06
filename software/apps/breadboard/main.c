@@ -1,167 +1,118 @@
-// Breadboard example app
-//
-// Read from multiple analog sensors and control an RGB LED
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <math.h>
-
-#include "app_timer.h"
+#include <string.h>
+#include "nrf_gpio.h"
 #include "nrf_delay.h"
-#include "nrfx_saadc.h"
-
 #include "microbit_v2.h"
+#include "nrfx_uarte.h"
 
-// Digital outputs
-// Breakout pins 13, 14, and 15
-// These are GPIO pin numbers that can be used in nrf_gpio_* calls
-#define LED_RED   EDGE_P13
-#define LED_GREEN EDGE_P14
-#define LED_BLUE  EDGE_P15
+// Pin configurations
+#define UART_RX              EDGE_P1
+#define UART_TX              EDGE_P2
+#define UART_TX_BUF_SIZE     1024
+#define UART_RX_BUF_SIZE     1024
+#define UART_BUF_SIZE     1024
 
-// Digital inputs
-// Breakout pin 16
-// These are GPIO pin numbers that can be used in nrf_gpio_* calls
-#define SWITCH_IN EDGE_P16
 
-// Analog inputs
-// Breakout pins 1 and 2
-// These are GPIO pin numbers that can be used in ADC configurations
-// AIN1 is breakout pin 1. AIN2 is breakout pin 2.
-#define ANALOG_TEMP_IN  NRF_SAADC_INPUT_AIN1
-#define ANALOG_LIGHT_IN NRF_SAADC_INPUT_AIN2
+nrfx_uarte_t g_Uarte = NRFX_UARTE_INSTANCE(1);
+nrfx_uarte_config_t g_UarteCfg = NRFX_UARTE_DEFAULT_CONFIG;
 
-// ADC channel configurations
-// These are ADC channel numbers that can be used in ADC calls
-#define ADC_TEMP_CHANNEL  0
-#define ADC_LIGHT_CHANNEL 1
 
-// Global variables
-APP_TIMER_DEF(sample_timer);
+// error handler for UART
+void uart_error_handle (uint32_t p_event) {
+  switch(p_event) {
+      case NRFX_ERROR_BUSY :
+         printf("NRFX_ERROR_BUSY\r\n" );
+         break;
+      case NRFX_ERROR_FORBIDDEN :
+         printf("NRFX_ERROR_FORBIDDEN\r\n" );
+         break;
+      case NRFX_ERROR_INVALID_ADDR :
+         printf("NRFX_ERROR_INVALID_ADDR\r\n" );
+         break;
+      case NRFX_ERROR_INTERNAL :
+         printf("NRFX_ERROR_INTERNAL\r\n" );
+         break;
+      default :
+         printf("NRF_SUCCESS\r\n" );
+   }
+}
 
-// Function prototypes
-static void gpio_init(void);
-static void adc_init(void);
-static float adc_sample_blocking(uint8_t channel);
-static float adc_temp(uint8_t channel);
 
-static void sample_timer_callback(void* _unused) {
-  // Do things periodically here
-  // TODO
-  nrf_gpio_pin_set(LED_RED);
-  nrf_gpio_pin_set(LED_GREEN);
-  nrf_gpio_pin_set(LED_BLUE);
+// initialization of UART
+void uart_init(void) {
+  g_UarteCfg.pselrxd = UART_RX;
+  g_UarteCfg.pseltxd = UART_TX;
+  g_UarteCfg.hwfc = NRF_UARTE_HWFC_DISABLED;
+  g_UarteCfg.baudrate = NRF_UARTE_BAUDRATE_115200;
+  g_UarteCfg.interrupt_priority = 1;
 
-  // switch on blue
-  int on = nrf_gpio_pin_read(SWITCH_IN);
-  if (on) {
-    nrf_gpio_pin_clear(LED_BLUE);
-  }
+  uint32_t err_code = nrfx_uarte_init(&g_Uarte, &g_UarteCfg, NULL);   // BLOCKING MODE
 
-  // Light on Red
-  float voltageB = adc_sample_blocking(ADC_LIGHT_CHANNEL);
-  if (voltageB <= 2.5) {
-    nrf_gpio_pin_clear(LED_RED);
-  }
-
-  // warm on gree
-  float voltageT = adc_sample_blocking(ADC_TEMP_CHANNEL);
-  float r = 10000.0*(float)(3.3-voltageT)/voltageT;
-  float t = 395.00/log(r/(10000.0*exp(-3950/298.15)));
-  printf("temperature %9.6f\n",t);
-
-  if (t > 30) {
-    nrf_gpio_pin_clear(LED_GREEN);
+  if (err_code != NRF_SUCCESS) {
+      printf("Error %lx\r\n", err_code);
+  } else {
+      printf("UARTE INIT NRF_SUCCESS\r\n");
   }
 }
 
-static void saadc_event_callback(nrfx_saadc_evt_t const* _unused) {
-  // don't care about saadc events
-  // ignore this function
+
+void uart_putstring(const char *s)
+{
+    uint8_t len = strlen((char *) s);
+    uint32_t ret_code = nrfx_uarte_tx(&g_Uarte, &s, len);
+    if (ret_code== NRF_SUCCESS)
+    {
+      printf("Message Sent succeed: %s", s);
+    } else {
+      printf("Message Sent failed: ");
+      uart_error_handle(ret_code);
+    }
 }
 
-static void gpio_init(void) {
-  // Initialize output pins
-  // TODO
-
-  // Set LEDs off initially
-  // TODO
-
-  // Initialize input pin
-  // TODO
+void uart_getstring(void){
+  uint8_t data = 0;
+  while(nrfx_uarte_rx_ready(&g_Uarte)){
+     printf("Receive Data from RX...\r\n");
+    if (nrfx_uarte_rx(&g_Uarte, &data, 1) == NRF_SUCCESS)
+    {
+      printf("%c", data);
+    } else {
+      printf("Error in nrfx_uarte_rx\r\n");
+    }
+  }
+  printf("Data Receive Ends\r\n");
 }
 
-static void adc_init(void) {
-  // Initialize the SAADC
-  nrfx_saadc_config_t saadc_config = {
-    .resolution = NRF_SAADC_RESOLUTION_12BIT,
-    .oversample = NRF_SAADC_OVERSAMPLE_DISABLED,
-    .interrupt_priority = 4,
-    .low_power_mode = false,
-  };
-  ret_code_t error_code = nrfx_saadc_init(&saadc_config, saadc_event_callback);
-  APP_ERROR_CHECK(error_code);
-
-  // Initialize temperature sensor channel
-  nrf_saadc_channel_config_t temp_channel_config = NRFX_SAADC_DEFAULT_CHANNEL_CONFIG_SE(ANALOG_TEMP_IN);
-  error_code = nrfx_saadc_channel_init(ADC_TEMP_CHANNEL, &temp_channel_config);
-  APP_ERROR_CHECK(error_code);
-
-  // Initialize light sensor channel
-  nrf_saadc_channel_config_t light_channel_config = NRFX_SAADC_DEFAULT_CHANNEL_CONFIG_SE(ANALOG_LIGHT_IN);
-  error_code = nrfx_saadc_channel_init(ADC_LIGHT_CHANNEL, &light_channel_config);
-  APP_ERROR_CHECK(error_code);
+void sendAT(char* command){
+  uart_putstring(command);
+  nrf_delay_ms(1000);
+  uart_getstring();
 }
 
-static float adc_sample_blocking(uint8_t channel) {
-  // read ADC counts (0-4095)
-  // this function blocks until the sample is ready
-  int16_t adc_counts = 0;
-  ret_code_t error_code = nrfx_saadc_sample_convert(channel, &adc_counts);
-  APP_ERROR_CHECK(error_code);
-
-  return adc_counts*3.6/4096;
-}
-
-// static float adc_temp(uint8_t channel) {
-//   int16_t adc_counts = 0;
-//   ret_code_t error_code = nrfx_saadc_sample_convert(channel, &adc_counts);
-//   APP_ERROR_CHECK(error_code);
-//   printf(adc_counts);
-//   return adc_counts;
-// }
 
 int main(void) {
-  printf("Board started!\n");
+  printf("\r\n\r\n**** Board Start ****\r\n");
+  // init uart
+  char test[] = "AT\r\n";
+  uart_init();
+  nrf_delay_ms(500);
 
-  // initialize GPIO
-  gpio_init();
+  //uart_putstring("AT\r\n");
+  uint8_t len = strlen((char *) test);
+  uint32_t ret_code = nrfx_uarte_tx(&g_Uarte, &test, len);
+  if (ret_code== NRF_SUCCESS)
+  {
+    printf("Message Sent succeed: %s", test);
+  } else {
+    printf("Message Sent failed: ");
+    uart_error_handle(ret_code);
+  }
 
-  // initialize ADC
-  adc_init();
-  nrf_gpio_pin_dir_set(LED_RED, NRF_GPIO_PIN_DIR_OUTPUT);
-  nrf_gpio_pin_dir_set(LED_GREEN, NRF_GPIO_PIN_DIR_OUTPUT);
-  nrf_gpio_pin_dir_set(LED_BLUE, NRF_GPIO_PIN_DIR_OUTPUT);
-  nrf_gpio_pin_dir_set(SWITCH_IN, NRF_GPIO_PIN_DIR_INPUT);
-  nrf_gpio_pin_set(LED_RED);
-  nrf_gpio_pin_set(LED_GREEN);
-  nrf_gpio_pin_set(LED_BLUE);
-
-
-
-  // initialize app timers
-  app_timer_init();
-  app_timer_create(&sample_timer, APP_TIMER_MODE_REPEATED, sample_timer_callback);
-
-  // start timer
-  // change the rate to whatever you want
-  app_timer_start(sample_timer, 32768, NULL);
-
-  // loop forever
+  nrf_delay_ms(500);
+  uart_getstring();
   while (1) {
-    // Don't put any code in here. Instead put periodic code in `sample_timer_callback()`
-
-    nrf_delay_ms(1000);
+    nrf_delay_ms(500);
   }
 }
